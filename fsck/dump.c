@@ -555,6 +555,36 @@ static void dump_file(struct f2fs_sb_info *sbi, struct node_info *ni,
 	close(c.dump_fd);
 }
 
+static void dump_link(struct f2fs_sb_info *sbi, struct node_info *ni,
+				struct f2fs_node *node_blk, char *path)
+{
+	struct f2fs_inode *inode = &node_blk->i;
+	int len = le32_to_cpu(inode->i_size);
+	int link_fd;
+	int ret;
+	char buf[len + 1];
+
+	dump_file(sbi, ni, node_blk, path);
+
+	link_fd = open(path, O_RDONLY);
+	ASSERT(link_fd);
+
+	read(link_fd, buf, len);
+	buf[len] = 0;
+
+	close(link_fd);
+	ret = unlink(path);
+	ASSERT(ret >= 0);
+
+#if defined(__MINGW32__)
+	ret = mklink(buf, path);
+	ASSERT(ret >= 0);
+#else
+	ret = symlink(buf, path);
+	ASSERT(ret >= 0);
+#endif
+}
+
 static void dump_folder(struct f2fs_sb_info *sbi, struct node_info *ni,
 				struct f2fs_node *node_blk, char *path, int is_root)
 {
@@ -639,8 +669,10 @@ dump:
 			name[namelen] = 0;
 		}
 
-		if (S_ISREG(imode) || S_ISLNK(imode)) {
+		if (S_ISREG(imode)) {
 			dump_file(sbi, ni, node_blk, name);
+		} else if S_ISLNK(imode) {
+			dump_link(sbi, ni, node_blk, name);
 		} else {
 			dump_folder(sbi, ni, node_blk, name, is_root);
 		}
@@ -650,8 +682,9 @@ dump:
 		if (c.preserve_perms) {
 			if (is_root)
 				strncpy(name, ".", 2);
-			ASSERT(chmod(name, imode) == 0);
-			ASSERT(chown(name, inode->i_uid, inode->i_gid) == 0);
+			if (!S_ISLNK(imode))
+				ASSERT(chmod(name, imode) == 0);
+			ASSERT(lchown(name, inode->i_uid, inode->i_gid) == 0);
 		}
 #endif
 		if (is_base)
